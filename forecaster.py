@@ -795,6 +795,7 @@ def combine_forecast(
     outlet: str,
     target_date: datetime.date = TARGET_DATE,
     use_llm: bool = True,
+    llm_only: bool = True,
 ) -> Dict:
     """
     Run all forecasting methods for one outlet and return combined report.
@@ -819,11 +820,6 @@ def combine_forecast(
     events = get_events_for_outlet(outlet, target_date, window_days=3)
     events_summary = summarize_events(events)
 
-    # Baselines
-    inertia  = inertia_forecast(df, outlet, target_date)
-    freq_fc  = frequency_forecast(df, outlet, target_date)
-    calendar = calendar_forecast(outlet, target_date)
-
     # Prepare topic info for LLM
     topic_info = freq.head(5).to_dict("records")
     # Add cluster_name to name if missing
@@ -836,7 +832,16 @@ def combine_forecast(
         llm_results = llm_forecast(df, labels, outlet, target_date,
                                    topic_info, events_summary, events)
 
-    all_preds = inertia + freq_fc + calendar + llm_results
+    if llm_only:
+        all_preds = llm_results
+        inertia = []
+        freq_fc = []
+        calendar = []
+    else:
+        inertia = inertia_forecast(df, outlet, target_date)
+        freq_fc = frequency_forecast(df, outlet, target_date)
+        calendar = calendar_forecast(outlet, target_date)
+        all_preds = inertia + freq_fc + calendar + llm_results
 
     report = {
         "outlet":           outlet,
@@ -857,6 +862,7 @@ def forecast_all(
     slugs: List[str] = None,
     target_date: datetime.date = TARGET_DATE,
     use_llm: bool = True,
+    llm_only: bool = True,
 ) -> Dict[str, Dict]:
     """
     Forecast for all outlets. Saves JSON to data/forecasts/.
@@ -867,7 +873,7 @@ def forecast_all(
 
     all_reports: Dict[str, Dict] = {}
     for slug in slugs:
-        report = combine_forecast(slug, target_date, use_llm=use_llm)
+        report = combine_forecast(slug, target_date, use_llm=use_llm, llm_only=llm_only)
         all_reports[slug] = report
 
     # Write combined JSON
@@ -875,5 +881,39 @@ def forecast_all(
     out_path = os.path.join(FORECASTS_DIR, f"forecast_{date_str}.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(all_reports, f, ensure_ascii=False, indent=2, default=str)
+
+    export_rows = []
+    for slug, report in all_reports.items():
+        outlet_name = report.get("outlet_name", slug)
+        top_topics = " | ".join(report.get("top_topics", [])[:5])
+        for pred in report.get("predictions", []):
+            export_rows.append({
+                "outlet": slug,
+                "outlet_name": outlet_name,
+                "target_date": report.get("target_date"),
+                "method": pred.get("method"),
+                "rubric": pred.get("rubric"),
+                "topic_label": pred.get("topic_label"),
+                "title": pred.get("title"),
+                "lead": pred.get("lead"),
+                "top_topics": top_topics,
+            })
+
+    xlsx_path = os.path.join(FORECASTS_DIR, f"forecast_{date_str}.xlsx")
+    df_export = pd.DataFrame(export_rows)
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        df_export.to_excel(writer, sheet_name="Все прогнозы", index=False)
+
+        df_llm = df_export[df_export["method"] == "llm"]
+        if not df_llm.empty:
+            df_llm.to_excel(writer, sheet_name="LLM заголовки", index=False)
+
+        for slug, report in all_reports.items():
+            rows = [row for row in export_rows if row["outlet"] == slug]
+            if not rows:
+                continue
+            pd.DataFrame(rows).to_excel(writer, sheet_name=slug[:31], index=False)
+
     print(f"\n[forecast] Saved → {out_path}")
+    print(f"[forecast] Saved → {xlsx_path}")
     return all_reports

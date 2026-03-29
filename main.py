@@ -130,7 +130,7 @@ def run_forecast(outlets: list, target_date: datetime.date,
     print(f"\n========== STAGE: FORECAST → {target_date} ==========")
     from forecaster import forecast_all
     from config import FORECASTS_DIR
-    reports = forecast_all(slugs=outlets, target_date=target_date, use_llm=use_llm)
+    reports = forecast_all(slugs=outlets, target_date=target_date, use_llm=use_llm, llm_only=True)
 
     # Pretty print summary
     date_str  = str(target_date)
@@ -140,13 +140,9 @@ def run_forecast(outlets: list, target_date: datetime.date,
         name = rep.get("outlet_name", slug)
         preds = rep.get("predictions", [])
         llm   = [p for p in preds if p.get("method") == "llm"]
-        cal   = [p for p in preds if p.get("method") == "calendar"]
-        base  = [p for p in preds if p.get("method") in ("inertia", "frequency")]
 
         print(f"\n  [{name}]")
         print(f"    Top topics : {', '.join(rep.get('top_topics', [])[:3])}")
-        print(f"    Calendar   : {len(cal)} events")
-        print(f"    Baselines  : {len(base)} predictions")
         print(f"    LLM titles : {len(llm)}")
 
         # Print LLM headlines if any
@@ -157,12 +153,6 @@ def run_forecast(outlets: list, target_date: datetime.date,
                 print(f"      • {title}")
                 if lead:
                     print(f"        > {lead[:120]}")
-
-        # Print calendar items
-        for item in cal[:3]:
-            title = item.get("title", "")
-            if title:
-                print(f"      [cal] {title}")
 
     print(f"\n  Full report saved → {json_path}")
 

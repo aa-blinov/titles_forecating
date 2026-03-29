@@ -39,6 +39,9 @@ OPINION_RUBRICS = {
 
 def clean_text(text: Optional[str]) -> Optional[str]:
     """Strip HTML tags, normalize whitespace and unicode."""
+    if text is None or (not isinstance(text, str) and pd.isna(text)):
+        return None
+    text = str(text)
     if not text:
         return None
     # Strip residual HTML
@@ -48,6 +51,41 @@ def clean_text(text: Optional[str]) -> Optional[str]:
     # Remove zero-width and control chars
     text = re.sub(r"[\u200b\u200c\u200d\ufeff\u00ad]", "", text)
     return text if text else None
+
+
+def clean_title(text: Optional[str], slug: str, rubric: Optional[str] = None) -> Optional[str]:
+    """Normalize outlet-specific title artifacts that leak from listing pages."""
+    title = clean_text(text)
+    if not title:
+        return None
+
+    rubric_text = clean_text(rubric) or ""
+
+    if slug == "lenta":
+        # Remove listing-page tails like:
+        # "...01:17, 18 февраля 2026Силовые структуры"
+        if rubric_text:
+            rubric_re = re.escape(rubric_text).replace(r"\ ", r"\s*")
+            title = re.sub(
+                rf"\s*\d{{1,2}}:\d{{2}},\s*\d{{1,2}}\s+[а-яё]+\s+\d{{4}}\s*{rubric_re}\s*$",
+                "",
+                title,
+                flags=re.IGNORECASE,
+            )
+        else:
+            title = re.sub(
+                r"\s*\d{1,2}:\d{2},\s*\d{1,2}\s+[а-яё]+\s+\d{4}\s*[А-ЯЁA-Z][^!?]*$",
+                "",
+                title,
+                flags=re.IGNORECASE,
+            )
+
+    if slug == "interfax":
+        # Remove numeric prefixes glued to digest/photochronicle titles.
+        title = re.sub(r"^\d+(?=(?:Фотохроника|Что произошло за день))", "", title)
+
+    title = re.sub(r"\s+", " ", title).strip(" -–|,;:")
+    return title or None
 
 
 def normalize_date(val) -> Optional[pd.Timestamp]:
@@ -153,6 +191,14 @@ def clean(df: pd.DataFrame, slug: str) -> Tuple[pd.DataFrame, Dict]:
     # 2. Clean text fields
     for col in ["title", "lead", "rubric"]:
         df[col] = df[col].apply(clean_text)
+
+    # 2.1 Clean outlet-specific title artifacts after basic text normalization
+    df["title"] = [
+        clean_title(title, slug=slug, rubric=rubric)
+        for title, rubric in zip(df["title"], df["rubric"])
+    ]
+    df = df[df["title"].fillna("").str.strip().astype(bool)].copy()
+    record_step("clean_titles", df)
 
     # 3. Normalize dates
     df["published_at"] = df["published_at"].apply(normalize_date)
