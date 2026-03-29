@@ -16,3 +16,11 @@ data/raw/
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment variables
+.env
+
+# Forecasts and logs
+data/forecasts/
+data/clean/
+data/events/events.csv
