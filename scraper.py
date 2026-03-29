@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import random
+import re
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -21,6 +22,33 @@ from config import (
     MAX_RETRIES, USER_AGENTS, WAYBACK_CDX_URL,
     HISTORY_FROM, TODAY, SCHEMA_COLS,
 )
+
+KOMMERSANT_ARCHIVE_DEFAULT_RUBRICS = [
+    {"id": 3, "name": "Экономика"},
+    {"id": 2, "name": "Политика"},
+    {"id": 5, "name": "Мир"},
+    {"id": 4, "name": "Бизнес"},
+    {"id": 40, "name": "Финансы"},
+    {"id": 41, "name": "Потребительский рынок"},
+    {"id": 138, "name": "Телекоммуникации"},
+    {"id": 7, "name": "Общество"},
+    {"id": 6, "name": "Происшествия"},
+    {"id": 8, "name": "Культура"},
+    {"id": 9, "name": "Спорт"},
+    {"id": 80, "name": "Hi-Tech"},
+    {"id": 68, "name": "Авто"},
+    {"id": 92, "name": "Стиль"},
+]
+KOMMERSANT_ARCHIVE_EXCLUDED = {
+    "интервью",
+    "мнения fm",
+    "подкасты",
+    "в эфире",
+    "в звуке",
+    "спецпроекты fm",
+    "в теме",
+}
+_KOMMERSANT_ARCHIVE_RUBRICS_CACHE: Optional[List[Dict]] = None
 
 # ================================================================
 #  HTTP HELPERS (ASYNC)
@@ -114,6 +142,17 @@ async def scrape_rss_async(slug: str, session: aiohttp.ClientSession) -> List[Di
     tasks = [fetch_and_parse(url) for url in cfg["rss"]]
     await asyncio.gather(*tasks)
     return results
+
+
+def _in_date_range(
+    published_at: Optional[datetime.datetime],
+    start_date: datetime.date,
+    end_date: datetime.date,
+) -> bool:
+    """Strict inclusive date filter used across all scraper inputs."""
+    if published_at is None:
+        return False
+    return start_date <= published_at.date() <= end_date
 
 
 def _extract_rubric_from_entry(entry: Dict, cfg: Dict) -> Optional[str]:
@@ -211,6 +250,143 @@ async def scrape_archive_day_async(slug: str, date: datetime.date,
     return articles
 
 
+async def _fetch_kommersant_archive_rubrics(session: aiohttp.ClientSession) -> List[Dict]:
+    """Load active archive rubrics from the Kommersant archive landing page."""
+    global _KOMMERSANT_ARCHIVE_RUBRICS_CACHE
+    if _KOMMERSANT_ARCHIVE_RUBRICS_CACHE is not None:
+        return _KOMMERSANT_ARCHIVE_RUBRICS_CACHE
+
+    archive_url = urljoin(OUTLETS["kommersant"]["url"], "archive")
+    html = await _get_async(archive_url, session)
+    if not html:
+        _KOMMERSANT_ARCHIVE_RUBRICS_CACHE = KOMMERSANT_ARCHIVE_DEFAULT_RUBRICS
+        return _KOMMERSANT_ARCHIVE_RUBRICS_CACHE
+
+    soup = _soup(html)
+    rubrics: List[Dict] = []
+    seen_ids = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        text = a.get_text(" ", strip=True)
+        match = re.match(r"^/archive/rubric/(\d+)$", href)
+        if not match or not text:
+            continue
+
+        rubric_id = int(match.group(1))
+        if rubric_id in seen_ids or text.lower() in KOMMERSANT_ARCHIVE_EXCLUDED:
+            continue
+
+        seen_ids.add(rubric_id)
+        rubrics.append({"id": rubric_id, "name": text})
+
+    if not rubrics:
+        rubrics = KOMMERSANT_ARCHIVE_DEFAULT_RUBRICS
+
+    _KOMMERSANT_ARCHIVE_RUBRICS_CACHE = rubrics
+    return rubrics
+
+
+def _parse_kommersant_archive_page(
+    html: str,
+    rubric_name: str,
+    start_date: datetime.date,
+    end_date: datetime.date,
+) -> List[Dict]:
+    """Parse one Kommersant archive page into article records."""
+    cfg = OUTLETS["kommersant"]
+    soup = _soup(html)
+    articles: List[Dict] = []
+
+    for article in soup.select("article.js-article"):
+        full_url = article.get("data-article-url", "").strip()
+        title = article.get("data-article-title", "").strip()
+        lead = article.get("data-article-description")
+        date_el = article.select_one("p.uho__tag")
+        pub = None
+
+        if not full_url or not _is_article_url("kommersant", full_url):
+            continue
+        if not title or len(title) < 10:
+            continue
+
+        if date_el:
+            date_text = re.sub(r"\s+", " ", date_el.get_text(" ", strip=True))
+            try:
+                pub = datetime.datetime.strptime(date_text, "%d.%m.%Y, %H:%M")
+            except ValueError:
+                pub = None
+        if pub is None:
+            continue
+        if not (start_date <= pub.date() <= end_date):
+            continue
+
+        articles.append({
+            "id": _make_id(full_url),
+            "outlet": "kommersant",
+            "url": full_url,
+            "published_at": pub,
+            "title": title,
+            "lead": lead.strip() if isinstance(lead, str) and lead.strip() else None,
+            "rubric": rubric_name,
+            "language": cfg["language"],
+            "country": cfg["country"],
+        })
+
+    return articles
+
+
+async def scrape_kommersant_archive_async(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    session: aiohttp.ClientSession,
+    concurrency_limit: int = 8,
+) -> List[Dict]:
+    """
+    Scrape Kommersant archive using rubric/day pages available on the live site.
+    """
+    rubric_defs = await _fetch_kommersant_archive_rubrics(session)
+    semaphore = asyncio.Semaphore(concurrency_limit)
+    days: List[datetime.date] = []
+    current = start_date
+    while current <= end_date:
+        days.append(current)
+        current += datetime.timedelta(days=1)
+
+    async def fetch_day(rubric: Dict, day: datetime.date) -> List[Dict]:
+        url = (
+            f"https://www.kommersant.ru/archive/rubric/{rubric['id']}"
+            f"/day/{day.isoformat()}"
+        )
+        async with semaphore:
+            html = await _get_async(url, session)
+        if not html:
+            return []
+        return _parse_kommersant_archive_page(
+            html,
+            rubric_name=rubric["name"],
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    tasks = [
+        fetch_day(rubric, day)
+        for rubric in rubric_defs
+        for day in days
+    ]
+    page_results = await asyncio.gather(*tasks)
+
+    deduped: Dict[str, Dict] = {}
+    for records in page_results:
+        for record in records:
+            existing = deduped.get(record["id"])
+            if existing is None:
+                deduped[record["id"]] = record
+                continue
+            if existing.get("published_at") is None and record.get("published_at") is not None:
+                deduped[record["id"]] = record
+    return list(deduped.values())
+
+
 def _is_article_url(slug: str, url: str) -> bool:
     """Heuristic: URL looks like an article."""
     path = urlparse(url).path
@@ -290,12 +466,18 @@ async def scrape_wayback_async(
 
 def save_raw(slug: str, records: List[Dict]) -> str:
     path = os.path.join(RAW_DIR, f"{slug}_raw.csv")
-    write_header = not os.path.exists(path)
-    with open(path, "a", newline="", encoding="utf-8") as f:
+    records = sorted(
+        records,
+        key=lambda rec: (
+            rec.get("published_at") is None,
+            str(rec.get("published_at") or ""),
+            rec.get("url") or "",
+        ),
+    )
+    with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=SCHEMA_COLS + ["_wayback_url"],
                                 extrasaction="ignore")
-        if write_header:
-            writer.writeheader()
+        writer.writeheader()
         for rec in records:
             writer.writerow(rec)
     return path
@@ -330,31 +512,47 @@ async def scrape_outlet_async(
         print(f"  [rss] fetching feeds...")
         rss_records = await scrape_rss_async(slug, session)
         for r in rss_records:
-            all_records[r["id"]] = r
+            if _in_date_range(r.get("published_at"), start_date, end_date):
+                all_records[r["id"]] = r
         print(f"  [rss] got {len(rss_records)} entries")
 
         # --- Archive ---
         if cfg["archive_url"]:
-            days = []
-            curr = start_date
-            while curr <= end_date:
-                days.append(curr)
-                curr += datetime.timedelta(days=1)
-            
-            async def fetch_day_with_limit(day):
-                async with semaphore:
-                    return await scrape_archive_day_async(slug, day, session)
-
-            print(f"  [archive] fetching {len(days)} days in parallel...")
-            day_results = await asyncio.gather(*[fetch_day_with_limit(d) for d in days])
-            
-            total_arch = 0
-            for day_recs in day_results:
-                for r in day_recs:
-                    if r["id"] not in all_records:
-                        all_records[r["id"]] = r
+            if slug == "kommersant":
+                print("  [archive] fetching rubric/day pages for Kommersant...")
+                archive_records = await scrape_kommersant_archive_async(
+                    start_date,
+                    end_date,
+                    session,
+                    concurrency_limit=concurrency_limit,
+                )
+                total_arch = 0
+                for record in archive_records:
+                    if record["id"] not in all_records:
+                        all_records[record["id"]] = record
                         total_arch += 1
-            print(f"  [archive] got {total_arch} new entries")
+                print(f"  [archive] got {total_arch} new entries")
+            else:
+                days = []
+                curr = start_date
+                while curr <= end_date:
+                    days.append(curr)
+                    curr += datetime.timedelta(days=1)
+                
+                async def fetch_day_with_limit(day):
+                    async with semaphore:
+                        return await scrape_archive_day_async(slug, day, session)
+
+                print(f"  [archive] fetching {len(days)} days in parallel...")
+                day_results = await asyncio.gather(*[fetch_day_with_limit(d) for d in days])
+                
+                total_arch = 0
+                for day_recs in day_results:
+                    for r in day_recs:
+                        if r["id"] not in all_records:
+                            all_records[r["id"]] = r
+                            total_arch += 1
+                print(f"  [archive] got {total_arch} new entries")
 
         # --- Wayback Fallback ---
         if len(all_records) < 50:
@@ -367,7 +565,10 @@ async def scrape_outlet_async(
                     added += 1
             print(f"  [wayback] added {added} entries")
 
-        records = list(all_records.values())
+        records = [
+            record for record in all_records.values()
+            if _in_date_range(record.get("published_at"), start_date, end_date)
+        ]
 
         # --- Enrich leads ---
         if enrich_leads and cfg["has_lead"]:

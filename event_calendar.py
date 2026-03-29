@@ -10,6 +10,69 @@ import pandas as pd
 from config import EVENTS_CSV, OUTLETS
 
 
+def _build_event(date: datetime.date, event_type: str, description: str,
+                 outlets: List[str], source: str) -> Dict:
+    return {
+        "date": date,
+        "event_type": event_type,
+        "description": description,
+        "outlets": outlets,
+        "source": source,
+    }
+
+
+def _daterange(lo: datetime.date, hi: datetime.date):
+    current = lo
+    while current <= hi:
+        yield current
+        current += datetime.timedelta(days=1)
+
+
+def _recurring_events(lo: datetime.date, hi: datetime.date) -> List[Dict]:
+    """
+    Lightweight fallback layer for predictable weekly/month-edge agenda.
+    Keeps calendar forecasts from going empty when events.csv is sparse.
+    """
+    events: List[Dict] = []
+    for day in _daterange(lo, hi):
+        if day.weekday() in (1, 2, 3):
+            events.append(_build_event(
+                day,
+                "politics",
+                "Плановая парламентская неделя: заседания Госдумы и профильных комитетов",
+                ["kommersant", "lenta", "interfax", "rbc"],
+                "recurring_parliament",
+            ))
+
+        if day.weekday() == 3:
+            events.append(_build_event(
+                day,
+                "economics",
+                "Еженедельная статистика рынка труда США",
+                ["kommersant", "interfax", "vedomosti", "rbc", "lenta"],
+                "recurring_us_labor",
+            ))
+
+        if day.weekday() in (5, 6):
+            events.append(_build_event(
+                day,
+                "sport",
+                "Матчи выходного дня: РПЛ, КХЛ и другие крупные турниры",
+                ["kommersant", "lenta", "interfax", "rbc"],
+                "recurring_sports",
+            ))
+
+        if day.day >= 28 or day.day <= 3:
+            events.append(_build_event(
+                day,
+                "economics",
+                "Конец месяца и новые оперативные данные по экономике и компаниям",
+                ["kommersant", "interfax", "vedomosti", "rbc"],
+                "recurring_month_edge",
+            ))
+    return events
+
+
 def load_events(
     target_date: Optional[datetime.date] = None,
     outlet: Optional[str] = None,
@@ -35,27 +98,43 @@ def load_events(
     df = pd.read_csv(EVENTS_CSV, dtype=str)
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
 
-    # Filter by date window
     if target_date is not None:
         lo = target_date - datetime.timedelta(days=window_days)
         hi = target_date + datetime.timedelta(days=window_days)
         df = df[(df["date"] >= lo) & (df["date"] <= hi)]
+    else:
+        valid_dates = df["date"].dropna()
+        if valid_dates.empty:
+            return []
+        lo = valid_dates.min()
+        hi = valid_dates.max()
 
-    # Filter by outlet
-    if outlet is not None:
-        df = df[df["outlets"].str.contains(outlet, na=False)]
-
-    events = []
+    events: List[Dict] = []
     for _, row in df.iterrows():
-        events.append({
-            "date":        row["date"],
-            "event_type":  row.get("event_type", ""),
-            "description": row.get("description", ""),
-            "outlets":     [o.strip() for o in str(row.get("outlets", "")).split(";")],
-            "source":      row.get("source", ""),
-        })
+        events.append(_build_event(
+            row["date"],
+            row.get("event_type", ""),
+            row.get("description", ""),
+            [o.strip() for o in str(row.get("outlets", "")).split(";") if o.strip()],
+            row.get("source", ""),
+        ))
 
-    return events
+    events.extend(_recurring_events(lo, hi))
+
+    if outlet is not None:
+        events = [ev for ev in events if outlet in ev.get("outlets", [])]
+
+    deduped = {}
+    for ev in events:
+        key = (
+            ev.get("date"),
+            ev.get("event_type"),
+            ev.get("description"),
+            tuple(sorted(ev.get("outlets", []))),
+        )
+        deduped[key] = ev
+
+    return sorted(deduped.values(), key=lambda ev: (ev.get("date") or datetime.date.min, ev.get("event_type", ""), ev.get("description", "")))
 
 
 def get_events_for_outlet(outlet: str, target_date: datetime.date,

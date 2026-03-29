@@ -1,24 +1,23 @@
 """
 Metrics:
-  1. topic_hit_rate     — topic IoU overlap (predicted vs actual rubrics/clusters)
+  1. topic_hit_rate     — keyword overlap between predicted topic texts and actual titles
   2. entity_match_rate  — entity recall (persons, orgs)
-  3. semantic_similarity— cosine sim via sentence-transformers
+  3. semantic_similarity— cosine sim via embeddings
   4. style_match        — TF-IDF cosine vs outlet corpus average
-  5. diversity_score    — 1 − mean pairwise similarity among predictions
+  5. diversity_score    — 1 − mean pairwise similarity among generated titles
 """
-import os
-import random
+from collections import Counter
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from config import OUTLET_SLUGS, OPENROUTER_API_KEY, OPENROUTER_URL
+from config import FREQ_WINDOW, OUTLET_SLUGS, OPENROUTER_API_KEY, OPENROUTER_URL
 from analyzer import (
-    _get_stopwords, _texts_for_outlet, extract_entities,
+    _get_stopwords, extract_entities,
 )
 
 # Load helper to handle circular imports if any (though lazy is safer)
@@ -67,18 +66,67 @@ def _encode_texts(texts: Tuple[str]):
 #  1. TOPIC HIT RATE
 # ================================================================
 
-def topic_hit_rate(pred_topics: List[str], actual_topics: List[str]) -> float:
-    """
-    Jaccard IoU on token-level topic overlap.
-    """
-    def _tokenize(topics: List[str]) -> set:
-        tokens = set()
-        for t in topics:
-            tokens.update(re.findall(r"[а-яёА-ЯЁa-zA-Z]{3,}", t.lower()))
-        return tokens
+_TOKEN_RE = re.compile(r"[а-яёА-ЯЁa-zA-Z]{3,}")
 
-    pred_set   = _tokenize(pred_topics)
-    actual_set = _tokenize(actual_topics)
+
+def _keyword_set(texts: List[str], top_k: int = 20) -> Set[str]:
+    """Build a compact topic signature from free-form texts."""
+    cleaned = [
+        re.sub(r"\s+", " ", str(text)).strip().lower()
+        for text in texts
+        if str(text).strip()
+    ]
+    if not cleaned:
+        return set()
+
+    stopwords = _get_stopwords()
+    try:
+        vec = TfidfVectorizer(
+            analyzer="word",
+            ngram_range=(1, 1),
+            token_pattern=r"(?u)\b[а-яА-ЯёЁa-zA-Z]{3,}\b",
+            stop_words=list(stopwords),
+            max_features=2000,
+        )
+        tfidf = vec.fit_transform(cleaned)
+        weights = np.asarray(tfidf.mean(axis=0)).ravel()
+        terms = vec.get_feature_names_out()
+        ranked_idx = weights.argsort()[::-1]
+        keywords = [terms[i] for i in ranked_idx if weights[i] > 0][:top_k]
+        if keywords:
+            return set(keywords)
+    except ValueError:
+        pass
+
+    counts: Counter = Counter()
+    for text in cleaned:
+        counts.update(
+            token
+            for token in _TOKEN_RE.findall(text)
+            if token not in stopwords
+        )
+    return {token for token, _ in counts.most_common(top_k)}
+
+
+def _prediction_topic_texts(preds: List[Dict]) -> List[str]:
+    """
+    Use the richest comparable topic description available for each prediction.
+    """
+    topic_texts = []
+    for pred in preds:
+        text = pred.get("title") or pred.get("topic_label") or pred.get("rubric") or ""
+        text = str(text).strip()
+        if text:
+            topic_texts.append(text)
+    return topic_texts
+
+
+def topic_hit_rate(pred_texts: List[str], actual_texts: List[str]) -> float:
+    """
+    Jaccard IoU on compact keyword sets derived from predictions and actual titles.
+    """
+    pred_set = _keyword_set(pred_texts)
+    actual_set = _keyword_set(actual_texts)
     if not actual_set:
         return 0.0
     intersection = pred_set & actual_set
@@ -199,12 +247,12 @@ def style_match(pred_texts: List[str], corpus_texts: List[str]) -> float:
 #  5. DIVERSITY SCORE
 # ================================================================
 
-def diversity_score(pred_texts: List[str]) -> float:
+def diversity_score(pred_texts: List[str]) -> Optional[float]:
     """
     1 − mean pairwise similarity among predictions.
     """
     if len(pred_texts) < 2:
-        return 1.0
+        return None
 
     stopwords = _get_stopwords()
     vec = TfidfVectorizer(
@@ -216,9 +264,21 @@ def diversity_score(pred_texts: List[str]) -> float:
         sims  = cosine_similarity(tfidf)
         n = sims.shape[0]
         off_diag = sims[np.triu_indices(n, k=1)]
-        return float(1 - off_diag.mean()) if len(off_diag) > 0 else 1.0
-    except Exception as exc:
+        return float(1 - off_diag.mean()) if len(off_diag) > 0 else None
+    except Exception:
         return 0.0
+
+
+def _history_days_before(df: pd.DataFrame, target_date: pd.Timestamp) -> int:
+    """Count unique publication dates available before a backtest day."""
+    train_days = df[df["published_at"].dt.date < target_date.date()]
+    return int(train_days["published_at"].dt.date.nunique())
+
+
+def _mean_or_none(values: List[float]) -> Optional[float]:
+    if not values:
+        return None
+    return round(float(np.mean(values)), 4)
 
 
 # ================================================================
@@ -227,51 +287,68 @@ def diversity_score(pred_texts: List[str]) -> float:
 
 def full_report(backtest_results: List[Dict], outlet: str,
                 corpus_texts: Optional[List[str]] = None,
-                method: str = "frequency") -> Dict:
+                method: str = "frequency",
+                min_history_days: int = FREQ_WINDOW) -> Dict:
     """
     Compute all 5 metrics across backtest days for a given method.
     """
     from etl import load_clean
 
+    df = load_clean(outlet)
     if corpus_texts is None:
-        df = load_clean(outlet)
         corpus_texts = df["title"].dropna().tolist()
+    else:
+        df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce")
 
     topic_hits: List[float]   = []
     entity_ms:  List[float]   = []
     sem_sims:   List[float]   = []
     style_ms:   List[float]   = []
     div_scores: List[float]   = []
+    days_skipped_short_history = 0
+    text_days_evaluated = 0
 
     for day_res in backtest_results:
         preds   = day_res.get("predictions", {}).get(method, [])
         actual  = day_res.get("actual", {})
+        target_date = pd.Timestamp(day_res.get("date"))
+        history_days = _history_days_before(df, target_date)
+        if history_days < min_history_days:
+            days_skipped_short_history += 1
+            continue
 
-        pred_topics  = [p.get("topic_label", "") for p in preds]
+        pred_topics  = _prediction_topic_texts(preds)
         pred_titles  = [p["title"] for p in preds if p.get("title")]
-        actual_topics= actual.get("rubrics", [])
         actual_titles= actual.get("titles", [])
 
         if not actual_titles:
             continue
 
-        topic_hits.append(topic_hit_rate(pred_topics, actual_topics))
+        topic_hits.append(topic_hit_rate(pred_topics, actual_titles))
+        if not pred_titles:
+            continue
+
+        text_days_evaluated += 1
         entity_ms.append(entity_match_rate(pred_titles, actual_titles))
         sem_sims.append(semantic_similarity(pred_titles, actual_titles))
         style_ms.append(style_match(pred_titles, corpus_texts))
-        div_scores.append(diversity_score(pred_titles))
-
-    def _mean(lst): return round(float(np.mean(lst)), 4) if lst else 0.0
+        div = diversity_score(pred_titles)
+        if div is not None:
+            div_scores.append(div)
 
     report = {
         "outlet":              outlet,
         "method":              method,
+        "days_available":      len(backtest_results),
         "days_evaluated":      len(topic_hits),
-        "topic_hit_rate":      _mean(topic_hits),
-        "entity_match_f1":     _mean(entity_ms),
-        "semantic_similarity": _mean(sem_sims),
-        "style_match":         _mean(style_ms),
-        "diversity_score":     _mean(div_scores),
+        "text_days_evaluated": text_days_evaluated,
+        "days_skipped_short_history": days_skipped_short_history,
+        "min_history_days":    min_history_days,
+        "topic_hit_rate":      _mean_or_none(topic_hits),
+        "entity_match_f1":     _mean_or_none(entity_ms),
+        "semantic_similarity": _mean_or_none(sem_sims),
+        "style_match":         _mean_or_none(style_ms),
+        "diversity_score":     _mean_or_none(div_scores),
     }
 
     return report

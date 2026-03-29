@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from config import OUTLET_SLUGS, BACKTEST_DAYS, FORECASTS_DIR
+from config import OUTLET_SLUGS, BACKTEST_DAYS, FORECASTS_DIR, FREQ_WINDOW
 from etl import load_clean
 from forecaster import (
     inertia_forecast, frequency_forecast, calendar_forecast, llm_forecast,
@@ -123,10 +123,35 @@ def run_backtest(
         for i in range(holdout_days - 1, -1, -1)
     ]
 
-    print(f"\n[backtest] {outlet}: holdout {holdout_dates[0]} → {holdout_dates[-1]}")
+    def _history_days_before(day: datetime.date) -> int:
+        return int(df[df["published_at"].dt.date < day]["published_at"].dt.date.nunique())
+
+    valid_holdout_dates = []
+    skipped_days = []
+    for day in holdout_dates:
+        history_days = _history_days_before(day)
+        if history_days < FREQ_WINDOW:
+            skipped_days.append((day, history_days))
+            continue
+        valid_holdout_dates.append(day)
+
+    if skipped_days:
+        print(
+            f"  [backtest] skipped {len(skipped_days)} day(s) for {outlet} "
+            f"with < {FREQ_WINDOW} history days"
+        )
+
+    if not valid_holdout_dates:
+        print(
+            f"  [backtest] {outlet}: no valid holdout dates "
+            f"(need at least {FREQ_WINDOW} history days)"
+        )
+        return []
+
+    print(f"\n[backtest] {outlet}: holdout {valid_holdout_dates[0]} → {valid_holdout_dates[-1]}")
 
     results: List[Dict] = []
-    for day in holdout_dates:
+    for day in valid_holdout_dates:
         day_res = backtest_day(df, outlet, day, methods)
         if day_res:
             results.append(day_res)

@@ -122,6 +122,8 @@ BACKTEST_DAYS   = 7        # holdout window for backtesting
 #  DEDUP THRESHOLD
 # ================================================================
 DEDUP_THRESHOLD = 0.85     # cosine similarity threshold for near-dedup
+DEDUP_WINDOW_HOURS = 72    # compare near-duplicates only within a local time window
+DEDUP_REQUIRE_SAME_RUBRIC = True
 
 # ================================================================
 #  SCHEMA

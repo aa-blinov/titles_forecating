@@ -107,16 +107,21 @@ def run_backtest(outlets: list) -> None:
 def run_metrics(outlets: list) -> None:
     print("\n========== STAGE: METRICS ==========")
     from metrics import evaluate_all
+
+    def _fmt_metric(value) -> str:
+        return "n/a" if value is None else f"{value:.3f}"
+
     reports = evaluate_all(slugs=outlets)
     print("\n--- Summary ---")
     for slug, rep in reports.items():
         print(
             f"  {slug:<12} "
-            f"topic_hit={rep.get('topic_hit_rate', 0):.3f}  "
-            f"entity_f1={rep.get('entity_match_f1', 0):.3f}  "
-            f"sem_sim={rep.get('semantic_similarity', 0):.3f}  "
-            f"style={rep.get('style_match', 0):.3f}  "
-            f"diversity={rep.get('diversity_score', 0):.3f}"
+            f"days={rep.get('days_evaluated', 0)}  "
+            f"topic_hit={_fmt_metric(rep.get('topic_hit_rate'))}  "
+            f"entity_f1={_fmt_metric(rep.get('entity_match_f1'))}  "
+            f"sem_sim={_fmt_metric(rep.get('semantic_similarity'))}  "
+            f"style={_fmt_metric(rep.get('style_match'))}  "
+            f"diversity={_fmt_metric(rep.get('diversity_score'))}"
         )
 
 
