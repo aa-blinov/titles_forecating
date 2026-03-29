@@ -7,6 +7,7 @@ Metrics:
   5. diversity_score    — 1 − mean pairwise similarity among predictions
 """
 import os
+import random
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -15,28 +16,51 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from config import OUTLET_SLUGS
-from backtester import load_backtest
+from config import OUTLET_SLUGS, OPENROUTER_API_KEY, OPENROUTER_URL
 from analyzer import (
     _get_stopwords, _texts_for_outlet, extract_entities,
 )
 
+# Load helper to handle circular imports if any (though lazy is safer)
+def load_backtest_internal(outlet: str) -> List[Dict]:
+    from backtester import load_backtest
+    return load_backtest(outlet)
+
 # ================================================================
-#  SENTENCE TRANSFORMER (lazy-loaded)
+#  OPENROUTER EMBEDDER (API-based)
 # ================================================================
-_ST_MODEL = None
+_EMB_CACHE = {}
+
+def _get_openrouter_embeddings(texts: Tuple[str]) -> np.ndarray:
+    if not OPENROUTER_API_KEY:
+        print("  [metrics] OPENROUTER_API_KEY missing, semantic similarity will be 0")
+        return None
+        
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            base_url=OPENROUTER_URL,
+            api_key=OPENROUTER_API_KEY,
+        )
+        # Используется модель Qwen3-8b через OpenRouter:
+        resp = client.embeddings.create(
+            model="qwen/qwen3-embedding-8b",
+            input=list(texts)
+        )
+        embeddings = [item.embedding for item in resp.data]
+        return np.array(embeddings)
+    except Exception as exc:
+        print(f"  [metrics] OpenRouter Embeddings Error: {exc}")
+        return None
 
 
-def _get_st_model():
-    global _ST_MODEL
-    if _ST_MODEL is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _ST_MODEL = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-            print("  [metrics] sentence-transformers model loaded")
-        except Exception as exc:
-            print(f"  [metrics] sentence-transformers not available: {exc}")
-    return _ST_MODEL
+def _encode_texts(texts: Tuple[str]):
+    if not texts:
+        return None
+    key = hash(texts)
+    if key not in _EMB_CACHE:
+        _EMB_CACHE[key] = _get_openrouter_embeddings(texts)
+    return _EMB_CACHE[key]
 
 
 # ================================================================
@@ -46,7 +70,6 @@ def _get_st_model():
 def topic_hit_rate(pred_topics: List[str], actual_topics: List[str]) -> float:
     """
     Jaccard IoU on token-level topic overlap.
-    Both lists are token-sets of topic labels (words from cluster names).
     """
     def _tokenize(topics: List[str]) -> set:
         tokens = set()
@@ -77,9 +100,6 @@ def entity_match_rate(pred_texts: List[str], actual_texts: List[str]) -> float:
     pred_ents   = set()
     actual_ents = set()
 
-    for ent_dict in [extract_entities(pred_texts), extract_entities(actual_texts)]:
-        pass  # iterate below
-
     p_ents = extract_entities(pred_texts)
     a_ents = extract_entities(actual_texts)
 
@@ -104,19 +124,27 @@ def entity_match_rate(pred_texts: List[str], actual_texts: List[str]) -> float:
 
 def semantic_similarity(pred_texts: List[str], actual_texts: List[str]) -> float:
     """
-    Average pairwise cosine similarity between predicted and actual texts
-    using multilingual sentence embeddings.
+    Semantic F1 score using pairwise cosine similarity between embeddings.
+    Measures both Precision (are predictions real-like?) and Recall (are actuals covered?).
     """
-    model = _get_st_model()
-    if model is None or not pred_texts or not actual_texts:
+    if not pred_texts or not actual_texts:
         return 0.0
 
     try:
-        pred_emb   = model.encode(pred_texts,   convert_to_numpy=True, show_progress_bar=False)
-        actual_emb = model.encode(actual_texts, convert_to_numpy=True, show_progress_bar=False)
+        pred_emb   = _encode_texts(tuple(pred_texts))
+        actual_emb = _encode_texts(tuple(actual_texts))
+        
+        if pred_emb is None or actual_emb is None:
+            return 0.0
+            
         sims = cosine_similarity(pred_emb, actual_emb)
-        # Mean of max similarity per predicted text
-        return float(np.mean(sims.max(axis=1)))
+        
+        precision = float(np.mean(sims.max(axis=1)))  # Each pred to its best actual
+        recall    = float(np.mean(sims.max(axis=0)))  # Each actual to its best pred
+        
+        if precision + recall == 0:
+            return 0.0
+        return 2 * (precision * recall) / (precision + recall)
     except Exception as exc:
         print(f"  [metrics] semantic_similarity error: {exc}")
         return 0.0
@@ -126,6 +154,8 @@ def semantic_similarity(pred_texts: List[str], actual_texts: List[str]) -> float
 #  4. STYLE MATCH
 # ================================================================
 
+_STYLE_CACHE = {}
+
 def style_match(pred_texts: List[str], corpus_texts: List[str]) -> float:
     """
     TF-IDF cosine similarity between predicted texts and outlet corpus average.
@@ -133,18 +163,31 @@ def style_match(pred_texts: List[str], corpus_texts: List[str]) -> float:
     if not pred_texts or not corpus_texts:
         return 0.0
 
-    stopwords = _get_stopwords()
-    vec = TfidfVectorizer(
-        analyzer="word", ngram_range=(1, 2),
-        max_features=5000,
-        stop_words=list(stopwords),
-    )
+    global _STYLE_CACHE
+    cache_key = (len(corpus_texts), corpus_texts[0] if corpus_texts else "")
+    
     try:
-        all_texts   = corpus_texts + pred_texts
-        tfidf       = vec.fit_transform(all_texts)
-        corpus_vecs = tfidf[:len(corpus_texts)]
-        pred_vecs   = tfidf[len(corpus_texts):]
-        corpus_mean = np.asarray(corpus_vecs.mean(axis=0))
+        if cache_key not in _STYLE_CACHE:
+            stopwords = _get_stopwords()
+            vec = TfidfVectorizer(
+                analyzer="word", ngram_range=(1, 2),
+                max_features=5000,
+                stop_words=list(stopwords),
+            )
+            
+            texts = corpus_texts
+            # Берем первые 2000 - это быстрее и стабильнее для кэширования
+            if len(texts) > 2000:
+                texts = texts[:2000]
+                
+            # Fit ONLY on the real corpus to prevent data leakage
+            corpus_vecs = vec.fit_transform(texts)
+            corpus_mean = np.asarray(corpus_vecs.mean(axis=0))
+            _STYLE_CACHE[cache_key] = (vec, corpus_mean)
+            
+        vec, corpus_mean = _STYLE_CACHE[cache_key]
+        pred_vecs   = vec.transform(pred_texts)
+        
         sims = cosine_similarity(pred_vecs, corpus_mean)
         return float(sims.mean())
     except Exception as exc:
@@ -158,8 +201,7 @@ def style_match(pred_texts: List[str], corpus_texts: List[str]) -> float:
 
 def diversity_score(pred_texts: List[str]) -> float:
     """
-    1 − mean pairwise cosine similarity among predictions.
-    Higher = more diverse.
+    1 − mean pairwise similarity among predictions.
     """
     if len(pred_texts) < 2:
         return 1.0
@@ -168,17 +210,14 @@ def diversity_score(pred_texts: List[str]) -> float:
     vec = TfidfVectorizer(
         analyzer="char_wb", ngram_range=(3, 5),
         max_features=3000,
-        stop_words=list(stopwords),
     )
     try:
         tfidf = vec.fit_transform(pred_texts)
         sims  = cosine_similarity(tfidf)
-        # Exclude diagonal
         n = sims.shape[0]
         off_diag = sims[np.triu_indices(n, k=1)]
         return float(1 - off_diag.mean()) if len(off_diag) > 0 else 1.0
     except Exception as exc:
-        print(f"  [metrics] diversity_score error: {exc}")
         return 0.0
 
 
@@ -235,29 +274,52 @@ def full_report(backtest_results: List[Dict], outlet: str,
         "diversity_score":     _mean(div_scores),
     }
 
-    print(f"\n[metrics] {outlet} | method={method}")
-    for k, v in report.items():
-        if isinstance(v, float):
-            print(f"  {k:<25} {v:.4f}")
-
     return report
 
 
 def evaluate_all(slugs: List[str] = None,
-                 methods: List[str] = None) -> Dict[str, Dict]:
+                 methods: List[str] = None) -> List[Dict]:
+    """
+    Generate reports for all outlets and all available methods.
+    """
     if slugs is None:
         slugs = OUTLET_SLUGS
     if methods is None:
-        methods = ["inertia", "frequency", "calendar"]
+        methods = ["inertia", "frequency", "calendar", "llm"]
 
     all_reports: Dict[str, Dict] = {}
+    from etl import load_clean
+    from tqdm import tqdm
+
+    print("\n[metrics] ================= STARTING EVALUATION =================")
+
     for slug in slugs:
-        bt = load_backtest(slug)
+        bt = load_backtest_internal(slug)
         if not bt:
-            print(f"  [metrics] No backtest data for {slug}")
+            print(f"  [metrics] ⚠️ No backtest data for {slug}")
             continue
-        # Use best baseline method (frequency usually wins)
-        best_method = methods[1] if len(methods) > 1 else methods[0]
-        report = full_report(bt, slug, method=best_method)
-        all_reports[slug] = report
+            
+        df = load_clean(slug)
+        corpus_texts = df["title"].dropna().tolist()
+        
+        # Check available methods in the first successful day
+        available_methods = []
+        for d in bt:
+            if d.get("predictions"):
+                available_methods = list(d["predictions"].keys())
+                break
+        
+        methods_to_run = [m for m in available_methods if m in methods]
+        if not methods_to_run:
+            print(f"  [metrics] ⏭️ Skipping {slug.upper()}: No active methods to test.")
+            continue
+            
+        print(f"\n📰 Outlet: {slug.upper()} | Base texts: {len(corpus_texts)} | Methods: {len(methods_to_run)}")
+        
+        for method in tqdm(methods_to_run, desc=f"Evaluating", leave=False):
+            report = full_report(bt, slug, corpus_texts=corpus_texts, method=method)
+            key = f"{slug} ({method})"
+            all_reports[key] = report
+            
+    print("\n[metrics] =================== EVALUATION DONE ===================\n")
     return all_reports

@@ -22,7 +22,7 @@ from config import (
 #  OPINION / BLOG URL PATTERNS TO FILTER OUT
 # ================================================================
 OPINION_URL_PATTERNS = re.compile(
-    r"/(opinion|opinions|blog|blogs|author|authors|column|columns|"
+    r"/(?:opinion|opinions|blog|blogs|author|authors|column|columns|"
     r"expert|experts|comment|comments|interview|reviews|review|"
     r"мнения|блог|авторы|колонка|рецензии)/",
     re.IGNORECASE,

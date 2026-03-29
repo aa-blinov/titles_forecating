@@ -49,7 +49,7 @@ def _llm_chat(prompt: str) -> str:
     response = client.chat.completions.create(
         model=OPENROUTER_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.75,
+        temperature=0.4,
         max_tokens=800,
         extra_headers={
             "HTTP-Referer": "https://github.com/aazhivotrev/titles_forecating", # Optional
@@ -160,6 +160,20 @@ def calendar_forecast(outlet: str, target_date: datetime.date) -> List[Dict]:
         })
     return results
 
+def _get_date_meta(target_date: datetime.date, events: List[Dict]) -> str:
+    """Return Russian day name and optional holiday info for context."""
+    days = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+    day_name = days[target_date.weekday()]
+    
+    # Check if target_date itself is a holiday
+    holidays = [e["description"] for e in events if e.get("event_type") == "holiday" and e.get("date") == target_date]
+    if holidays:
+        # Avoid duplicate "День смеха (1 апреля)" -> just info
+        h_str = ", ".join(holidays)
+        return f"{day_name}, {h_str}"
+    
+    return day_name
+
 
 # ================================================================
 #  LLM — STYLE EXAMPLES SELECTOR
@@ -189,46 +203,56 @@ def _pick_style_examples(df: pd.DataFrame, n: int = 5) -> List[str]:
 def _build_llm_prompt(
     outlet: str,
     target_date: datetime.date,
+    date_meta: str,
     topic_label: str,
+    topic_metrics: str,
     events_summary: str,
     style_examples: List[str],
     top_entities: List[str],
     has_lead: bool,
 ) -> str:
     outlet_name  = OUTLETS[outlet]["name"]
-    date_str     = target_date.strftime("%d %B %Y")
+    date_str     = target_date.strftime("%d.%m.%Y")
     examples_str = "\n\n".join(style_examples) if style_examples else "(примеры недоступны)"
     entities_str = ", ".join(top_entities[:10]) if top_entities else "нет данных"
 
-    lead_instruction = (
-        "Для каждой новости напиши: ЗАГОЛОВОК и ЛИД (1-2 предложения, до 50 слов)."
+    lead_req = "ЗАГОЛОВОК и ЛИД (1-2 предложения, до 50 слов)" if has_lead else "только ЗАГОЛОВОК"
+    format_req = (
+        "1. ЗАГОЛОВОК: ...\n   ЛИД: ...\n2. ЗАГОЛОВОК: ...\n   ЛИД: ..."
         if has_lead else
-        "Напиши только ЗАГОЛОВОК для каждой новости."
+        "1. ЗАГОЛОВОК: ...\n2. ЗАГОЛОВОК: ..."
     )
 
-    return f"""Ты — опытный редактор издания «{outlet_name}».
-Дата прогноза: {date_str}.
-Тематическая область: «{topic_label}».
-
-Известные события на эту дату и рядом:
+    return f"""# CONTEXT
+Издание: «{outlet_name}».
+Целевая дата публикации: {date_str} ({date_meta}).
+Смысловая тематика (определена алгоритмом): «{topic_label}» (внимание: улови суть темы из этих слов, избегай их точного бездумного копирования).
+{topic_metrics}
+Известные календарные события:
 {events_summary}
+Главные действующие лица и организации темы: {entities_str}.
 
-Часто упоминаемые персоны и организации в последние недели:
-{entities_str}
+# OBJECTIVE
+Сгенерируй 5 правдоподобных новостных сюжетов на указанную дату, которые могли бы естественным образом появиться в издании «{outlet_name}».
+Используй актуальную повестку (календарные события и реальных действующих лиц) вместо абстрактных или выдуманных (фантастических) событий.
 
-Примеры заголовков (и лидов) в стиле «{outlet_name}»:
+# STYLE
+Новостная заметка. Используй структуру предложений, лексику и подачу, характерные для этого издания.
+Ориентируйся на этот срез реальных недавних публикаций:
 {examples_str}
 
-Задача: напиши 5 правдоподобных новостных заголовков, которые могло бы опубликовать издание «{outlet_name}» {date_str}. Опирайся на тематику, стиль примеров и известные события. НЕ копируй примеры дословно. Строго придерживайся tone-of-voice издания.
+# TONE
+Профессиональный тон, полностью копирующий оригинальный tone-of-voice рассматриваемого медиа (официоз, деловая аналитика и т.д. — проанализируй это из примеров).
 
-{lead_instruction}
+# AUDIENCE
+Постоянные читатели источника «{outlet_name}», привыкшие к стандартам этой редакции.
 
-Формат ответа (строго):
-1. ЗАГОЛОВОК: ...
-   ЛИД: ...
-2. ЗАГОЛОВОК: ...
-   ЛИД: ...
-...
+# RESPONSE
+Выведи ровно 5 пронумерованных пунктов.
+Для каждой новости напиши {lead_req}.
+Выводи только результат, без вводных или заключительных приветствий.
+Используй строго следующий формат:
+{format_req}
 """
 
 
@@ -278,10 +302,12 @@ def _parse_llm_response(text: str, outlet: str, target_date: datetime.date,
 
 def llm_forecast(
     df: pd.DataFrame,
+    labels: pd.Series,
     outlet: str,
     target_date: datetime.date,
-    topic_labels: List[str],
+    topic_info: List[Dict],
     events_summary: str,
+    events_list: List[Dict] = None,
     n_topics: int = 3,
 ) -> List[Dict]:
     """
@@ -292,27 +318,42 @@ def llm_forecast(
         return []
 
     has_lead = OUTLETS[outlet]["has_lead"]
-    top_entities_data = entity_frequency(df)
-    top_persons  = top_entities_data.get("persons", pd.Series()).index.tolist()[:10]
-    top_orgs     = top_entities_data.get("orgs", pd.Series()).index.tolist()[:10]
-    top_entities = top_persons + top_orgs
+    
+    df_clustered = df.copy()
+    df_clustered["cluster"] = labels
 
-    style_examples = _pick_style_examples(df, n=5)
-
+    date_meta = _get_date_meta(target_date, events_list or [])
+    
     all_results = []
-    for topic in topic_labels[:n_topics]:
-        print(f"  [llm] {outlet} | topic: {topic[:60]}...")
+    for info in topic_info[:n_topics]:
+        label = info["name"]
+        cluster_id = info["cluster"]
+        
+        # Context strictly isolated to current topic
+        df_topic = df_clustered[df_clustered["cluster"] == cluster_id]
+        
+        topic_entities_data = entity_frequency(df_topic)
+        top_persons  = topic_entities_data.get("persons", pd.Series()).index.tolist()[:7]
+        top_orgs     = topic_entities_data.get("orgs", pd.Series()).index.tolist()[:7]
+        top_entities = top_persons + top_orgs
+
+        style_examples = _pick_style_examples(df_topic, n=5)
+
+        metrics = (f"Популярность темы в последнее время: {info['count']} новостей "
+                   f"({info['pct']}% от общего потока).")
+        
+        print(f"  [llm] {outlet} | topic: {label[:60]}...")
         prompt = _build_llm_prompt(
-            outlet, target_date, topic,
+            outlet, target_date, date_meta, label, metrics,
             events_summary, style_examples, top_entities,
             has_lead=has_lead,
         )
         try:
             raw = _llm_chat(prompt)
-            parsed = _parse_llm_response(raw, outlet, target_date, topic)
+            parsed = _parse_llm_response(raw, outlet, target_date, label)
             all_results.extend(parsed)
         except Exception as exc:
-            print(f"  [llm] Error for {outlet}/{topic}: {exc}")
+            print(f"  [llm] Error for {outlet}/{label}: {exc}")
 
     return all_results
 
@@ -354,11 +395,17 @@ def combine_forecast(
     freq_fc  = frequency_forecast(df, outlet, target_date)
     calendar = calendar_forecast(outlet, target_date)
 
+    # Prepare topic info for LLM
+    topic_info = freq.head(5).to_dict("records")
+    # Add cluster_name to name if missing
+    for ti in topic_info:
+        ti["name"] = ti.get("cluster_name", "unknown")
+
     # LLM
     llm_results: List[Dict] = []
     if use_llm:
-        llm_results = llm_forecast(df, outlet, target_date,
-                                   top_topics, events_summary)
+        llm_results = llm_forecast(df, labels, outlet, target_date,
+                                   topic_info, events_summary, events)
 
     all_preds = inertia + freq_fc + calendar + llm_results
 

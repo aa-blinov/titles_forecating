@@ -13,8 +13,10 @@ import pandas as pd
 from config import OUTLET_SLUGS, BACKTEST_DAYS, FORECASTS_DIR
 from etl import load_clean
 from forecaster import (
-    inertia_forecast, frequency_forecast, calendar_forecast,
+    inertia_forecast, frequency_forecast, calendar_forecast, llm_forecast,
 )
+from analyzer import extract_topics, topic_frequency
+from event_calendar import get_events_for_outlet, summarize_events
 
 
 # ================================================================
@@ -49,6 +51,18 @@ def backtest_day(
         "predictions": {},
     }
 
+    # Pre-calculate shared context if LLM is requested
+    llm_context = None
+    if "llm" in methods:
+        labels, names, _ = extract_topics(df_train, outlet)
+        freq = topic_frequency(df_train, labels, names)
+        topic_info = freq.head(5).to_dict("records")
+        for ti in topic_info: ti["name"] = ti.get("cluster_name", "unknown")
+        
+        events = get_events_for_outlet(outlet, target_date, window_days=2)
+        events_summary = summarize_events(events)
+        llm_context = (labels, topic_info, events_summary, events)
+
     for method in methods:
         try:
             if method == "inertia":
@@ -57,11 +71,19 @@ def backtest_day(
                 preds = frequency_forecast(df_train, outlet, target_date)
             elif method == "calendar":
                 preds = calendar_forecast(outlet, target_date)
+            elif method == "llm":
+                if llm_context:
+                    labs, ti, es, el = llm_context
+                    # Limit LLM to 2 topics in backtest to save time/tokens
+                    preds = llm_forecast(df_train, labs, outlet, target_date, ti, es, el, n_topics=2)
+                else:
+                    preds = []
             else:
                 continue
+                
             day_result["predictions"][method] = [
                 {k: v for k, v in p.items()
-                 if k in ("rubric", "topic_label", "title", "lead")}
+                 if k in ("rubric", "topic_label", "title", "lead", "method")}
                 for p in preds
             ]
         except Exception as exc:
@@ -85,7 +107,7 @@ def run_backtest(
     Returns list of per-day result dicts.
     """
     if methods is None:
-        methods = ["inertia", "frequency", "calendar"]
+        methods = ["inertia", "frequency", "calendar", "llm"]
 
     df = load_clean(outlet)
     if df.empty:
@@ -129,6 +151,8 @@ def save_backtest(outlet: str, results: List[Dict]) -> str:
 
 def load_backtest(outlet: str) -> List[Dict]:
     """Load the most recent backtest file for an outlet."""
+    if not os.path.exists(FORECASTS_DIR):
+        return []
     files = sorted([
         f for f in os.listdir(FORECASTS_DIR)
         if f.startswith(f"backtest_{outlet}_") and f.endswith(".json")
@@ -152,7 +176,7 @@ def backtest_all(
     if slugs is None:
         slugs = OUTLET_SLUGS
     if methods is None:
-        methods = ["inertia", "frequency", "calendar"]
+        methods = ["inertia", "frequency", "calendar", "llm"]
 
     all_results: Dict[str, List[Dict]] = {}
     for slug in slugs:
