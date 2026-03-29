@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Data (raw scraped data — может быть большим)
+data/raw/
+
+# Временные файлы Excel
+~$*.xlsx
+~$*.xls
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,26 @@
+date,event_type,description,outlets,source
+2026-04-01,holiday,День смеха (1 апреля),rbc;kommersant;lenta;interfax;vedomosti,calendar
+2026-04-02,economics,Ожидается публикация PMI-индексов промышленного производства (мировые),rbc;vedomosti;kommersant;interfax,economic_calendar
+2026-04-02,politics,Заседание Госдумы (плановое),rbc;interfax;kommersant,duma_calendar
+2026-04-02,economics,Статистика рынка труда США (еженедельная),rbc;vedomosti,us_calendar
+2026-04-03,economics,Заседание Банка России / пресс-конференция (ближайшее),rbc;vedomosti;kommersant;interfax,cbr
+2026-04-04,sport,Тур де Франс / футбольные матчи РПЛ (тур),lenta;rbc,sports_calendar
+2026-04-06,holiday,Православное Вербное воскресенье (2026),rbc;lenta;interfax,calendar
+2026-04-07,health,Всемирный день здоровья (ВОЗ),rbc;lenta;interfax,who_calendar
+2026-04-08,economics,Ожидается квартальный отчёт Сбербанка (МСФО 1Q2026),rbc;vedomosti;kommersant;interfax,sber_ir
+2026-04-09,politics,Заседание Совета Федерации (плановое),interfax;kommersant;rbc,sf_calendar
+2026-04-10,space,День космонавтики (12 апреля — в 2026 выходной перенесён),lenta;rbc;interfax,calendar
+2026-04-12,holiday,День космонавтики,rbc;lenta;interfax;kommersant,calendar
+2026-04-13,economics,Публикация данных ЦБ РФ по инфляции (недельная),rbc;vedomosti;interfax,cbr
+2026-04-14,finance,Дивидендный сезон 2026 — анонс Лукойл / Роснефть,rbc;vedomosti;kommersant,ir_calendar
+2026-04-15,politics,Международный форум / G7 (возможный),rbc;kommersant;interfax,foreign_affairs
+2026-04-16,economics,Ожидается отчёт Яндекса 1Q2026,rbc;vedomosti;kommersant,yandex_ir
+2026-04-17,economics,Заседание Комитета по открытым рынкам ФРС США (FOMC),rbc;vedomosti,us_fed
+2026-04-18,holiday,Страстная пятница (католическая) + рынки закрыты,rbc;vedomosti;kommersant,calendar
+2026-04-20,holiday,Пасха Православная 2026,lenta;rbc;interfax,calendar
+2026-04-21,sport,Футбол РПЛ — тур выходного дня,lenta;rbc,rpf_calendar
+2026-04-22,environment,День Земли,lenta;rbc,calendar
+2026-04-24,economics,Заседание ЕЦБ (ожидаемое),rbc;vedomosti;kommersant,ecb
+2026-04-25,politics,Заседание Госдумы (плановое),interfax;rbc;kommersant,duma_calendar
+2026-04-28,economics,ВВП России 1Q2026 (предварительная оценка Росстат),rbc;vedomosti;kommersant;interfax,rosstat
+2026-04-30,economics,Ожидается публикация бюджетного исполнения за 1Q2026,rbc;vedomosti;kommersant,minfin
