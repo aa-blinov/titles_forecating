@@ -11,7 +11,7 @@ Usage:
   uv run python main.py --mode all        # run full pipeline end-to-end
 
 Optional flags:
-  --outlets rbc,kommersant,...     # comma-separated outlet slugs (default: all 5)
+  --outlets kommersant,lenta,...   # comma-separated outlet slugs (default: all 3)
   --target  2026-04-02             # override target forecast date
   --no-llm                         # skip LLM generation step
   --enrich-leads                   # fetch full article leads during scraping (slow)
@@ -38,7 +38,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--outlets", default=None,
-        help="Comma-separated outlet slugs: rbc,kommersant,vedomosti,lenta,interfax",
+        help="Comma-separated outlet slugs: kommersant,lenta,interfax",
     )
     parser.add_argument(
         "--target", default="2026-04-02",

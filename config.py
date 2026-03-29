@@ -35,23 +35,6 @@ TARGET_DATE  = datetime.date(2026, 4, 2)
 # ================================================================
 # Keys: short slug used as filename prefix and dict key everywhere.
 OUTLETS = {
-    "rbc": {
-        "name": "РБК",
-        "url": "https://www.rbc.ru/",
-        "rss": [
-            "https://rss.rbc.ru/v10/main.rss",
-            "https://rss.rbc.ru/v10/economics.rss",
-            "https://rss.rbc.ru/v10/politics.rss",
-            "https://rss.rbc.ru/v10/business.rss",
-            "https://rss.rbc.ru/v10/finance.rss",
-        ],
-        "archive_url": "https://www.rbc.ru/v10/all/{year}/{month:02d}/{day:02d}",
-        "lead_selector": "p.article__text",
-        "rubric_selector": "span.article__header__category",
-        "has_lead": True,
-        "language": "ru",
-        "country": "RU",
-    },
     "kommersant": {
         "name": "Коммерсантъ",
         "url": "https://www.kommersant.ru/",
@@ -64,19 +47,6 @@ OUTLETS = {
         "lead_selector": "p.js-search-mark",
         "rubric_selector": "a.article_subheader",
         "has_lead": True,
-        "language": "ru",
-        "country": "RU",
-    },
-    "vedomosti": {
-        "name": "Ведомости",
-        "url": "https://www.vedomosti.ru/",
-        "rss": [
-            "https://www.vedomosti.ru/rss/news",
-        ],
-        "archive_url": None,   # Paywall — RSS only
-        "lead_selector": None,
-        "rubric_selector": None,
-        "has_lead": False,     # Paywall: headlines only
         "language": "ru",
         "country": "RU",
     },

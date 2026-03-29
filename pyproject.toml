@@ -1,0 +1,33 @@
+[project]
+name = "titles-forecasting"
+version = "0.1.0"
+description = "News forecast pipeline with OpenRouter LLM and uv workflow"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "feedparser>=6.0.11",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.3",
+    "lxml>=6.0.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",
+    "sentence-transformers>=3.0.0",
+    "openai>=1.14.0",
+    "python-dotenv>=1.0.1",
+    "pymystem3>=0.2.0",
+    "razdel>=0.5.0",
+    "tqdm>=4.66.0",
+    "plotly>=5.22.0",
+    "nltk>=3.8.0",
+    "python-dateutil>=2.9.0",
+    "pytz>=2024.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+managed = true
+package = false

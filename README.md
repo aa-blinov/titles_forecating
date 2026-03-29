@@ -1,14 +1,12 @@
 # News Forecast Pipeline
 
-Автоматический пайплайн сбора, анализа и прогнозирования новостей пяти крупнейших российских СМИ с LLM-генерацией заголовков на дату **02.04.2026**.
+Автоматический пайплайн сбора, анализа и прогнозирования новостей трех крупнейших российских СМИ с LLM-генерацией заголовков на дату **02.04.2026**.
 
 ## СМИ
 
 | Slug | Название | Источники | Лиды |
 |---|---|---|---|
-| `rbc` | РБК | RSS + архив | ✅ |
 | `kommersant` | Коммерсантъ | RSS + архив | ✅ |
-| `vedomosti` | Ведомости | RSS (paywall) | ❌ |
 | `lenta` | Лента.ру | RSS + архив | ✅ |
 | `interfax` | Интерфакс | RSS + архив | ✅ |
 
@@ -71,7 +69,7 @@ uv run python main.py --mode metrics
 uv run python main.py --mode forecast --target 2026-04-02
 
 # Только одно СМИ, без LLM
-uv run python main.py --mode all --outlets rbc --no-llm
+uv run python main.py --mode all --outlets kommersant --no-llm
 ```
 
 ### 4. Запуск в Jupyter
@@ -83,7 +81,7 @@ uv run python main.py --mode all --outlets rbc --no-llm
 | Флаг | Описание | По умолчанию |
 |---|---|---|
 | `--mode` | Этап пайплайна: `scrape / etl / analyze / backtest / metrics / forecast / all` | обязательный |
-| `--outlets` | Список СМИ через запятую: `rbc,lenta,...` | все 5 |
+| `--outlets` | Список СМИ через запятую: `kommersant,lenta,...` | все 3 |
 | `--target` | Дата прогноза `YYYY-MM-DD` | `2026-04-02` |
 | `--no-llm` | Пропустить генерацию через OpenRouter | выключено |
 | `--enrich-leads` | Скачивать полные лиды (медленно, ~1-2 с/статья) | выключено |

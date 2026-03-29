@@ -302,7 +302,7 @@ def scrape_outlet(slug: str, start_date: datetime.date = None,
     Full scrape for one outlet:
       1. RSS (always)
       2. Archive pages day-by-day if archive_url is set
-      3. Wayback fallback for vedomosti or if archive returns nothing
+      3. Wayback fallback if archive returns nothing
     Optional: enrich leads by visiting each article URL.
     """
     if start_date is None:
@@ -323,8 +323,8 @@ def scrape_outlet(slug: str, start_date: datetime.date = None,
         all_records[r["id"]] = r
     print(f"  [rss] got {len(rss_records)} entries")
 
-    # --- Archive pages (skip vedomosti, skip if no archive_url) ---
-    if cfg["archive_url"] and slug != "vedomosti":
+    # --- Archive pages (skip if no archive_url) ---
+    if cfg["archive_url"]:
         day = start_date
         total_arch = 0
         while day <= end_date:
@@ -338,7 +338,7 @@ def scrape_outlet(slug: str, start_date: datetime.date = None,
         print(f"  [archive] got {total_arch} new entries from archive pages")
 
     # --- Wayback fallback ---
-    if slug == "vedomosti" or len(all_records) < 50:
+    if len(all_records) < 50:
         print(f"  [wayback] using Wayback CDX API fallback...")
         wb_recs = scrape_wayback(slug, start_date, end_date, session)
         added = 0
