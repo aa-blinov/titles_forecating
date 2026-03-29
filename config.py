@@ -3,6 +3,10 @@ Configuration: outlets, paths, dates, Ollama settings.
 """
 import os
 import datetime
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # ================================================================
 #  BASE DIRECTORY — everything lives inside titles/
@@ -129,10 +133,11 @@ WAYBACK_CDX_URL = (
 )
 
 # ================================================================
-#  OLLAMA SETTINGS
+#  OPENROUTER SETTINGS
 # ================================================================
-OLLAMA_URL    = "http://localhost:11434"
-OLLAMA_MODEL  = "llama3.1"     # change to gemma3:4b if preferred
+OPENROUTER_API_KEY  = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_URL      = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL    = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-haiku-20240307")
 
 # ================================================================
 #  ANALYSIS SETTINGS

@@ -16,12 +16,12 @@
 
 ```
 titles/
-├── config.py           # пути, даты, параметры всех СМИ и Ollama
+├── config.py           # пути, даты, параметры всех СМИ и OpenRouter (через .env)
 ├── scraper.py          # RSS + архив + Wayback Machine CDX fallback
 ├── etl.py              # очистка, дедупликация (TF-IDF cosine), фильтр мнений
 ├── analyzer.py         # TF-IDF + KMeans топики, NER (pymystem3), noise check
 ├── event_calendar.py   # события апреля 2026 из CSV
-├── forecaster.py       # baseline inertia/frequency/calendar + Ollama LLM
+├── forecaster.py       # baseline inertia/frequency/calendar + OpenRouter LLM
 ├── backtester.py       # holdout-бэктест на последних 7 днях
 ├── metrics.py          # 5 метрик качества прогноза
 ├── main.py             # CLI точка входа
@@ -40,37 +40,38 @@ titles/
 ### 1. Установка зависимостей
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 Python 3.10+. Для Python 3.14 используйте версии пакетов из `requirements.txt` — они содержат pre-built wheels.
 
-### 2. Ollama (локальный LLM)
+### 2. OpenRouter (LLM)
 
-```bash
-# Установить: https://ollama.com/download
-ollama pull llama3.1
-ollama serve
-```
+1. Создайте файл `.env` на основе `.env.example`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Впишите ваш API-ключ в `.env` (`OPENROUTER_API_KEY=...`).
+3. По желанию измените модель (`OPENROUTER_MODEL=...`).
 
-Без Ollama можно запустить с флагом `--no-llm` — пайплайн сгенерирует baseline-прогнозы.
+Без LLM можно запустить с флагом `--no-llm`.
 
 ### 3. Запуск через CLI
 
 ```bash
 # Полный пайплайн (сбор → ETL → анализ → бэктест → прогноз)
-python main.py --mode all --target 2026-04-02
+uv run python main.py --mode all --target 2026-04-02
 
 # Отдельные шаги
-python main.py --mode scrape
-python main.py --mode etl
-python main.py --mode analyze
-python main.py --mode backtest
-python main.py --mode metrics
-python main.py --mode forecast --target 2026-04-02
+uv run python main.py --mode scrape
+uv run python main.py --mode etl
+uv run python main.py --mode analyze
+uv run python main.py --mode backtest
+uv run python main.py --mode metrics
+uv run python main.py --mode forecast --target 2026-04-02
 
 # Только одно СМИ, без LLM
-python main.py --mode all --outlets rbc --no-llm
+uv run python main.py --mode all --outlets rbc --no-llm
 ```
 
 ### 4. Запуск в Jupyter
@@ -84,7 +85,7 @@ python main.py --mode all --outlets rbc --no-llm
 | `--mode` | Этап пайплайна: `scrape / etl / analyze / backtest / metrics / forecast / all` | обязательный |
 | `--outlets` | Список СМИ через запятую: `rbc,lenta,...` | все 5 |
 | `--target` | Дата прогноза `YYYY-MM-DD` | `2026-04-02` |
-| `--no-llm` | Пропустить генерацию через Ollama | выключено |
+| `--no-llm` | Пропустить генерацию через OpenRouter | выключено |
 | `--enrich-leads` | Скачивать полные лиды (медленно, ~1-2 с/статья) | выключено |
 
 ## Методы прогнозирования
@@ -94,7 +95,7 @@ python main.py --mode all --outlets rbc --no-llm
 | **inertia** | Темы с наибольшей частотой за последние 7 дней |
 | **frequency** | Темы с наибольшей частотой за скользящее окно 30 дней |
 | **calendar** | События из `data/events/events.csv` в ±3 дня от целевой даты |
-| **llm** | Ollama (llama3.1) генерирует заголовки + лиды по промпту со стилем СМИ |
+| **llm** | OpenRouter (Claude/Llama/Gemma) генерирует заголовки + лиды по промпту со стилем СМИ |
 
 ## Метрики качества (бэктест)
 
@@ -118,7 +119,7 @@ python main.py --mode all --outlets rbc --no-llm
 ## Требования
 
 - Python ≥ 3.10
-- Ollama ≥ 0.6 (опционально)
-- RAM ≥ 8 ГБ (для `sentence-transformers` + `llama3.1`)
+- API ключ OpenRouter
+- RAM ≥ 8 ГБ (для `sentence-transformers`)
 - Интернет для скрапинга RSS и архивов
 

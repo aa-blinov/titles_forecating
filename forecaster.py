@@ -15,7 +15,7 @@ import pandas as pd
 import numpy as np
 
 from config import (
-    OUTLETS, FORECASTS_DIR, OLLAMA_URL, OLLAMA_MODEL,
+    OUTLETS, FORECASTS_DIR, OPENROUTER_API_KEY, OPENROUTER_URL, OPENROUTER_MODEL,
     FREQ_WINDOW, TARGET_DATE,
 )
 from etl import load_clean
@@ -27,47 +27,36 @@ from event_calendar import get_events_for_outlet, summarize_events
 
 
 # ================================================================
-#  OLLAMA AVAILABILITY CHECK
+#  OPENROUTER (LLM) INTEGRATION
 # ================================================================
 
-def check_ollama() -> bool:
-    """Return True if Ollama is running and the model is available."""
-    try:
-        import ollama
-        response = ollama.list()
-        # ollama >= 0.4: response is a ListResponse with .models list of Model objects
-        models_list = getattr(response, "models", None)
-        if models_list is not None:
-            names = [getattr(m, "model", "") or getattr(m, "name", "") for m in models_list]
-        else:
-            # fallback for very old versions
-            names = [m.get("name", m.get("model", "")) for m in response.get("models", [])]
-        available = any(OLLAMA_MODEL in n for n in names)
-        if not available:
-            print(f"[ollama] Model '{OLLAMA_MODEL}' not found. Available: {names}")
-            print(f"[ollama] Run: ollama pull {OLLAMA_MODEL}")
-        return available
-    except Exception as exc:
-        print(f"[ollama] Not reachable: {exc}")
-        print("[ollama] Make sure Ollama is running: ollama serve")
+def check_llm_availability() -> bool:
+    """Return True if OpenRouter API key is set."""
+    if not OPENROUTER_API_KEY:
+        print("[llm] OPENROUTER_API_KEY not found in environment.")
         return False
+    return True
 
 
-def _ollama_chat(prompt: str) -> str:
-    """Send a single prompt to Ollama and return the response text."""
-    import ollama
-    resp = ollama.chat(
-        model=OLLAMA_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        options={"temperature": 0.75, "num_predict": 600},
+def _llm_chat(prompt: str) -> str:
+    """Send a single prompt to OpenRouter and return the response text."""
+    from openai import OpenAI
+    client = OpenAI(
+        base_url=OPENROUTER_URL,
+        api_key=OPENROUTER_API_KEY,
     )
-    # ollama >= 0.4 returns ChatResponse object; < 0.4 returns dict
-    msg = getattr(resp, "message", None)
-    if msg is not None:
-        content = getattr(msg, "content", "") or ""
-    else:
-        content = resp.get("message", {}).get("content", "")
-    return content.strip()
+    
+    response = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.75,
+        max_tokens=800,
+        extra_headers={
+            "HTTP-Referer": "https://github.com/aazhivotrev/titles_forecating", # Optional
+            "X-Title": "Titles Forecasting Project", # Optional
+        }
+    )
+    return response.choices[0].message.content.strip()
 
 
 # ================================================================
@@ -297,10 +286,9 @@ def llm_forecast(
 ) -> List[Dict]:
     """
     Generate LLM-based forecasts for top N topics.
-    Falls back silently if Ollama not available.
     """
-    if not check_ollama():
-        print(f"  [llm] Skipping LLM for {outlet} — Ollama unavailable")
+    if not check_llm_availability():
+        print(f"  [llm] Skipping LLM for {outlet} — API key missing")
         return []
 
     has_lead = OUTLETS[outlet]["has_lead"]
@@ -320,7 +308,7 @@ def llm_forecast(
             has_lead=has_lead,
         )
         try:
-            raw = _ollama_chat(prompt)
+            raw = _llm_chat(prompt)
             parsed = _parse_llm_response(raw, outlet, target_date, topic)
             all_results.extend(parsed)
         except Exception as exc:

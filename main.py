@@ -2,13 +2,13 @@
 Main CLI for the news forecast pipeline.
 
 Usage:
-  python main.py --mode scrape     # collect 90 days of news
-  python main.py --mode etl        # clean + deduplicate
-  python main.py --mode analyze    # topics + noise check + entities
-  python main.py --mode backtest   # holdout backtest
-  python main.py --mode metrics    # evaluate backtest quality
-  python main.py --mode forecast   # generate forecast for 02.04.2026
-  python main.py --mode all        # run full pipeline end-to-end
+  uv run python main.py --mode scrape     # collect 90 days of news
+  uv run python main.py --mode etl        # clean + deduplicate
+  uv run python main.py --mode analyze    # topics + noise check + entities
+  uv run python main.py --mode backtest   # holdout backtest
+  uv run python main.py --mode metrics    # evaluate backtest quality
+  uv run python main.py --mode forecast   # generate forecast for 02.04.2026
+  uv run python main.py --mode all        # run full pipeline end-to-end
 
 Optional flags:
   --outlets rbc,kommersant,...     # comma-separated outlet slugs (default: all 5)
@@ -46,7 +46,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--no-llm", action="store_true",
-        help="Skip Ollama LLM generation",
+        help="Skip OpenRouter LLM generation",
     )
     parser.add_argument(
         "--enrich-leads", action="store_true",
