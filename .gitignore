@@ -21,6 +21,5 @@ Thumbs.db
 .env
 
 # Forecasts and logs
-data/forecasts/
 data/clean/
 data/events/events.csv
