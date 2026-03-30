@@ -13,6 +13,8 @@ Usage:
 Optional flags:
   --outlets kommersant,lenta,...   # comma-separated outlet slugs (default: all 3)
   --target  2026-04-02             # override target forecast date
+  --forecast-strategy llm|hybrid   # how topics are selected for LLM forecast
+  --forecast-profile default|forward_look  # prompt/profile variant for forecast
   --no-llm                         # skip LLM generation step
   --enrich-leads                   # fetch full article leads during scraping (slow)
 """
@@ -43,6 +45,16 @@ def _parse_args():
     parser.add_argument(
         "--target", default="2026-04-02",
         help="Forecast target date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--forecast-strategy", default="llm",
+        choices=["llm", "hybrid"],
+        help="Topic selection strategy for forecast mode",
+    )
+    parser.add_argument(
+        "--forecast-profile", default="default",
+        choices=["default", "forward_look"],
+        help="Prompt/profile variant for forecast mode",
     )
     parser.add_argument(
         "--no-llm", action="store_true",
@@ -126,16 +138,23 @@ def run_metrics(outlets: list) -> None:
 
 
 def run_forecast(outlets: list, target_date: datetime.date,
-                 use_llm: bool) -> None:
-    print(f"\n========== STAGE: FORECAST → {target_date} ==========")
+                 use_llm: bool, forecast_strategy: str,
+                 forecast_profile: str) -> None:
+    print(
+        f"\n========== STAGE: FORECAST → {target_date} "
+        f"[{forecast_strategy} / {forecast_profile}] =========="
+    )
     from forecaster import forecast_all
-    from config import FORECASTS_DIR
-    reports = forecast_all(slugs=outlets, target_date=target_date, use_llm=use_llm, llm_only=True)
+    reports = forecast_all(
+        slugs=outlets,
+        target_date=target_date,
+        use_llm=use_llm,
+        llm_only=True,
+        forecast_strategy=forecast_strategy,
+        forecast_profile=forecast_profile,
+    )
 
     # Pretty print summary
-    date_str  = str(target_date)
-    json_path = os.path.join(FORECASTS_DIR, f"forecast_{date_str}.json")
-
     for slug, rep in reports.items():
         name = rep.get("outlet_name", slug)
         preds = rep.get("predictions", [])
@@ -154,7 +173,7 @@ def run_forecast(outlets: list, target_date: datetime.date,
                 if lead:
                     print(f"        > {lead[:120]}")
 
-    print(f"\n  Full report saved → {json_path}")
+    print("\n  Forecast artifacts saved in data/forecasts/ with a run timestamp.")
 
 
 # ================================================================
@@ -172,7 +191,11 @@ def main():
         print(f"[main] Invalid date: {args.target}. Use YYYY-MM-DD.")
         sys.exit(1)
 
-    print(f"[main] Mode={args.mode}  Outlets={outlets}  Target={target_date}  LLM={use_llm}")
+    print(
+        f"[main] Mode={args.mode}  Outlets={outlets}  Target={target_date}  "
+        f"LLM={use_llm}  ForecastStrategy={args.forecast_strategy}  "
+        f"ForecastProfile={args.forecast_profile}"
+    )
 
     if args.mode in ("scrape", "all"):
         run_scrape(outlets, args.enrich_leads)
@@ -190,7 +213,13 @@ def main():
         run_metrics(outlets)
 
     if args.mode in ("forecast", "all"):
-        run_forecast(outlets, target_date, use_llm)
+        run_forecast(
+            outlets,
+            target_date,
+            use_llm,
+            args.forecast_strategy,
+            args.forecast_profile,
+        )
 
     print("\n[main] Done.")
 

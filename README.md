@@ -97,13 +97,23 @@ uv run python main.py --mode backtest
 uv run python main.py --mode metrics
 uv run python main.py --mode forecast --target 2026-04-02
 
+# Комбинированный forecast-режим
+uv run python main.py --mode forecast --target 2026-04-02 --forecast-strategy hybrid
+
+# Отдельный профиль с forward-looking анонсами на целевую дату
+uv run python main.py --mode forecast --target 2026-04-02 --forecast-profile forward_look
+
+# Два итоговых варианта прогноза, которые сохранены в репозитории
+uv run python main.py --mode forecast --target 2026-04-02 --forecast-strategy llm --forecast-profile default
+uv run python main.py --mode forecast --target 2026-04-02 --forecast-strategy hybrid --forecast-profile forward_look
+
 # Только одно СМИ
 uv run python main.py --mode forecast --outlets kommersant --target 2026-04-02
 ```
 
 ### 4. Jupyter
 
-Откройте [pipeline.ipynb](/Users/justcomex/Documents/nstu/pet/titles_forecating/pipeline.ipynb) и выполните ячейки по порядку.
+Откройте [pipeline.ipynb](pipeline.ipynb) и выполните ячейки по порядку.
 
 ## Флаги CLI
 
@@ -112,6 +122,8 @@ uv run python main.py --mode forecast --outlets kommersant --target 2026-04-02
 | `--mode` | `scrape / etl / analyze / backtest / metrics / forecast / all` | обязательный |
 | `--outlets` | список slug через запятую | все 3 |
 | `--target` | дата прогноза `YYYY-MM-DD` | `2026-04-02` |
+| `--forecast-strategy` | стратегия отбора тем для LLM: `llm` или `hybrid` | `llm` |
+| `--forecast-profile` | профиль прогноза: `default` или `forward_look` | `default` |
 | `--no-llm` | пропустить OpenRouter-генерацию | выключено |
 | `--enrich-leads` | скачивать полные лиды из article pages | выключено |
 
@@ -125,6 +137,41 @@ uv run python main.py --mode forecast --outlets kommersant --target 2026-04-02
 | `llm` | генерирует заголовки и лиды через OpenRouter по retrieval-grounded prompt |
 
 Для честного конкурсного артефакта `forecast`-режим экспортирует только `llm`-прогнозы. Baseline-методы остаются в пайплайне для backtest и сравнения качества.
+
+В `hybrid`-режиме итоговые заголовки по-прежнему пишет `llm`, но выбор тем перед генерацией идёт по ансамблю из `frequency`, `inertia` и `calendar` сигналов с учетом outlet-specific priors для каждого СМИ.
+
+Профиль `forward_look` не меняет базовый LLM-pipeline по умолчанию, а запускается отдельно: он поднимает темы, в недавних публикациях которых уже встречаются анонсы, плановые формулировки и прямые упоминания целевой даты вроде `2 апреля`.
+
+## Итоговые режимы
+
+В репозитории оставлены два итоговых варианта прогноза, чтобы не потерять и базовый LLM-подход, и более экспериментальный forward-looking режим.
+
+- `llm + default` — опорный вариант. Он берет сильные темы из ближайшей ретроспективы, добавляет retrieval по похожим историческим заголовкам и генерирует финальные заголовки и лиды без отдельного форсирования анонсов на целевую дату.
+- `hybrid + forward_look` — расширенный вариант. Он добавляет ансамбль topic-сигналов (`frequency + inertia + calendar`), outlet-specific priors и отдельный слой поиска forward-looking упоминаний вроде `2 апреля`, `в четверг`, `ожидается`, `вступит в силу`.
+
+Имена итоговых файлов теперь фиксируют оба измерения:
+
+- `forecast_{YYYY-MM-DD}_{strategy}_{profile}_{YYYYMMDD_HHMMSS}.json`
+- `forecast_{YYYY-MM-DD}_{strategy}_{profile}_{YYYYMMDD_HHMMSS}.xlsx`
+
+Это позволяет хранить рядом несколько запусков без перезаписи и сразу видеть, какой профиль породил конкретный прогноз.
+
+## Что было попробовано
+
+Из-за сжатого времени пайплайн развивался как серия быстрых гипотез с обязательной перепроверкой через backtest и ручной просмотр прогнозов.
+
+- Исправили методологию оценки: разделили topic-level и text-level метрики, убрали ложные нули у методов без генерации заголовков и запретили оценивать слишком короткую историю.
+- Починили scraper и ETL: строгий date slice, перезапись `raw` вместо бесконечного append, новый архив для `Коммерсанта`, title cleanup, локальный near-dedup и audit-отчеты по очистке.
+- Проверили несколько вариантов генерации: retrieval-grounded LLM, subclustering, reranking кандидатов, outlet-aware priors для разных типов СМИ и отдельный forward-looking профиль по ближайшей ретроспективе.
+
+Что получилось по итогам итераций:
+
+- `frequency` остался самым надежным topic-level baseline.
+- `llm` оказался самым полезным как базовый генератор правдоподобных заголовков.
+- outlet-aware `hybrid` сделал итоговые заголовки заметно ближе к редакционному углу каждого СМИ.
+- `forward_look` не заменил базовый pipeline, но стал полезным отдельным профилем для сюжетов, где в свежих публикациях уже есть анонсы, планы и временные маркеры.
+
+Итоговый рабочий компромисс такой: в репозитории сохранены оба варианта, `llm + default` как опорный и `hybrid + forward_look` как более смелый экспериментальный режим.
 
 ## Оценка качества
 
@@ -149,9 +196,9 @@ uv run python main.py --mode forecast --outlets kommersant --target 2026-04-02
 | `data/clean/{slug}_etl_audit.json` | сводка ETL по шагам |
 | `data/clean/{slug}_etl_daily_counts.csv` | дневные counts по этапам ETL |
 | `data/forecasts/backtest_{slug}_{YYYYMMDD}.json` | backtest по одному СМИ |
-| `data/forecasts/forecast_{YYYY-MM-DD}.json` | итоговый LLM-only прогноз |
-| `data/forecasts/forecast_{YYYY-MM-DD}.xlsx` | итоговый LLM-only прогноз в Excel |
-| `data/forecasts/forecast_{YYYY-MM-DD}_shortlist.md` | ручная shortlist-выборка лучших LLM-прогнозов для submission |
+| `data/forecasts/forecast_{YYYY-MM-DD}_{strategy}_{profile}_{YYYYMMDD_HHMMSS}.json` | итоговый прогноз в JSON, имя файла фиксирует стратегию и профиль |
+| `data/forecasts/forecast_{YYYY-MM-DD}_{strategy}_{profile}_{YYYYMMDD_HHMMSS}.xlsx` | итоговый прогноз в Excel, имя файла фиксирует стратегию и профиль |
+| `data/forecasts/forecast_{YYYY-MM-DD}_{strategy}_{profile}_shortlist.md` | shortlist-выборка лучших заголовков для конкретного варианта прогноза |
 
 ## Для конкурсной подачи
 
@@ -161,7 +208,7 @@ uv run python main.py --mode forecast --outlets kommersant --target 2026-04-02
 - пайплайн запускается одной CLI-командой;
 - можно приложить описание используемой LLM и prompts;
 - можно добавить ссылку на публичный репозиторий и финальные артефакты из `data/forecasts/`;
-- для быстрой подачи можно использовать готовый shortlist-файл `data/forecasts/forecast_2026-04-02_shortlist.md`.
+- для быстрой подачи можно использовать shortlist-файлы [forecast_2026-04-02_llm_default_shortlist.md](data/forecasts/forecast_2026-04-02_llm_default_shortlist.md) и [forecast_2026-04-02_hybrid_forward_look_shortlist.md](data/forecasts/forecast_2026-04-02_hybrid_forward_look_shortlist.md).
 
 ## Ограничения
 
