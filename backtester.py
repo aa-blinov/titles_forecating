@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from config import OUTLET_SLUGS, BACKTEST_DAYS, FORECASTS_DIR, FREQ_WINDOW
+from config import OUTLET_SLUGS, BACKTEST_DAYS, BACKTESTS_DIR, FREQ_WINDOW
 from etl import load_clean
 from forecaster import (
     inertia_forecast, frequency_forecast, calendar_forecast, llm_forecast,
@@ -167,7 +167,7 @@ def run_backtest(
 
 def save_backtest(outlet: str, results: List[Dict]) -> str:
     today_str = datetime.date.today().strftime("%Y%m%d")
-    path = os.path.join(FORECASTS_DIR, f"backtest_{outlet}_{today_str}.json")
+    path = os.path.join(BACKTESTS_DIR, f"backtest_{outlet}_{today_str}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2, default=str)
     print(f"  [backtest] saved → {path}")
@@ -176,15 +176,15 @@ def save_backtest(outlet: str, results: List[Dict]) -> str:
 
 def load_backtest(outlet: str) -> List[Dict]:
     """Load the most recent backtest file for an outlet."""
-    if not os.path.exists(FORECASTS_DIR):
+    if not os.path.exists(BACKTESTS_DIR):
         return []
     files = sorted([
-        f for f in os.listdir(FORECASTS_DIR)
+        f for f in os.listdir(BACKTESTS_DIR)
         if f.startswith(f"backtest_{outlet}_") and f.endswith(".json")
     ])
     if not files:
         return []
-    path = os.path.join(FORECASTS_DIR, files[-1])
+    path = os.path.join(BACKTESTS_DIR, files[-1])
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 

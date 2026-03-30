@@ -195,7 +195,7 @@ uv run python main.py --mode forecast --outlets kommersant --target 2026-04-02
 | `data/clean/{slug}_clean.csv` | очищенный корпус |
 | `data/clean/{slug}_etl_audit.json` | сводка ETL по шагам |
 | `data/clean/{slug}_etl_daily_counts.csv` | дневные counts по этапам ETL |
-| `data/forecasts/backtest_{slug}_{YYYYMMDD}.json` | backtest по одному СМИ |
+| `data/forecasts/backtests/backtest_{slug}_{YYYYMMDD}.json` | backtest по одному СМИ |
 | `data/forecasts/forecast_{YYYY-MM-DD}_{strategy}_{profile}_{YYYYMMDD_HHMMSS}.json` | итоговый прогноз в JSON, имя файла фиксирует стратегию и профиль |
 | `data/forecasts/forecast_{YYYY-MM-DD}_{strategy}_{profile}_{YYYYMMDD_HHMMSS}.xlsx` | итоговый прогноз в Excel, имя файла фиксирует стратегию и профиль |
 | `data/forecasts/forecast_{YYYY-MM-DD}_{strategy}_{profile}_shortlist.md` | shortlist-выборка лучших заголовков для конкретного варианта прогноза |

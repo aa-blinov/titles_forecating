@@ -16,11 +16,12 @@ DATA_DIR        = os.path.join(BASE_DIR, "data")
 RAW_DIR         = os.path.join(DATA_DIR, "raw")
 CLEAN_DIR       = os.path.join(DATA_DIR, "clean")
 FORECASTS_DIR   = os.path.join(DATA_DIR, "forecasts")
+BACKTESTS_DIR   = os.path.join(FORECASTS_DIR, "backtests")
 EVENTS_DIR      = os.path.join(DATA_DIR, "events")
 EVENTS_CSV      = os.path.join(EVENTS_DIR, "events.csv")
 INTERMEDIATE_JSON = os.path.join(RAW_DIR, "intermediate_scrape.json")
 
-for _d in [RAW_DIR, CLEAN_DIR, FORECASTS_DIR, EVENTS_DIR]:
+for _d in [RAW_DIR, CLEAN_DIR, FORECASTS_DIR, BACKTESTS_DIR, EVENTS_DIR]:
     os.makedirs(_d, exist_ok=True)
 
 # ================================================================
